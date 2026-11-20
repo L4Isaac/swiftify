@@ -214,6 +214,7 @@ void PlaybackController::adoptRemoteSong(const Song &song)
     // would only be wrong about it
     m_queue = {song};
     m_shuffledQueue = {song};
+    m_queuedByHand.clear();
     setCurrentSong(song);
     setLoading(false);
     setLivePosition(m_core->playbackPositionMs());
@@ -445,6 +446,34 @@ void PlaybackController::rebuildShuffledQueue(const std::optional<Song> &startin
     m_shuffledQueue = remaining;
 }
 
+QList<Song> PlaybackController::upNextQueuedByHand() const
+{
+    QList<Song> songs;
+    for (const Song &song : upNextSongs()) {
+        if (m_queuedByHand.contains(song.instanceId)) {
+            songs.append(song);
+        }
+    }
+    return songs;
+}
+
+void PlaybackController::keepAfterInShuffle(const Song &current, const QList<Song> &songs)
+{
+    if (songs.isEmpty()) {
+        return;
+    }
+    const auto listed = [&](const Song &item) {
+        return std::any_of(songs.begin(), songs.end(), [&](const Song &song) { return song.isSameInstance(item); });
+    };
+    m_shuffledQueue.removeIf(listed);
+    const auto at = std::find_if(m_shuffledQueue.begin(), m_shuffledQueue.end(),
+                                 [&](const Song &item) { return item.isSameInstance(current); });
+    qsizetype row = at == m_shuffledQueue.end() ? 0 : std::distance(m_shuffledQueue.begin(), at) + 1;
+    for (const Song &song : songs) {
+        m_shuffledQueue.insert(row++, song);
+    }
+}
+
 void PlaybackController::refreshSongDetails(const QList<Song> &fresh)
 {
     QHash<QString, const Song *> byUri;
@@ -565,11 +594,29 @@ void PlaybackController::playLoadingTest()
 
 void PlaybackController::beginPlayback(const Song &song, const QList<Song> &queue, bool fromSearch)
 {
+    // what play next or play last added and has not played yet goes on
+    // straight after the picked song, ahead of the rest of its list
+    QList<Song> queuedByHand = upNextQueuedByHand();
+    queuedByHand.removeIf([&](const Song &item) { return item.isSameInstance(song); });
+    m_queuedByHand.clear();
+    for (const Song &item : std::as_const(queuedByHand)) {
+        m_queuedByHand.insert(item.instanceId);
+    }
+
     const bool inQueue = std::any_of(queue.begin(), queue.end(), [&](const Song &item) { return item.isSameInstance(song); });
     m_queue = inQueue ? queue : QList<Song> {song};
+    if (!queuedByHand.isEmpty()) {
+        m_queue.removeIf([&](const Song &item) { return m_queuedByHand.contains(item.instanceId); });
+        const auto at = std::find_if(m_queue.begin(), m_queue.end(), [&](const Song &item) { return item.isSameInstance(song); });
+        qsizetype row = std::distance(m_queue.begin(), at) + 1;
+        for (const Song &item : std::as_const(queuedByHand)) {
+            m_queue.insert(row++, item);
+        }
+    }
     m_history.clear();
     if (m_shuffle) {
         rebuildShuffledQueue(song);
+        keepAfterInShuffle(song, queuedByHand);
     } else {
         m_shuffledQueue.clear();
     }
@@ -613,6 +660,7 @@ void PlaybackController::playNext(const Song &song)
             rebuildShuffledQueue(current);
         }
     }
+    m_queuedByHand.insert(song.instanceId);
     queueDidChange();
     syncMediaSession();
 }
@@ -633,6 +681,7 @@ void PlaybackController::playLast(const Song &song)
         m_shuffledQueue.removeIf([&](const Song &item) { return item.isSameInstance(song); });
         m_shuffledQueue.append(song);
     }
+    m_queuedByHand.insert(song.instanceId);
     queueDidChange();
     syncMediaSession();
 }
@@ -1158,7 +1207,11 @@ void PlaybackController::toggleShuffle()
     m_shuffle = !m_shuffle;
     m_history.clear();
     if (m_shuffle) {
+        const QList<Song> queuedByHand = upNextQueuedByHand();
         rebuildShuffledQueue(m_currentSong);
+        if (m_currentSong) {
+            keepAfterInShuffle(*m_currentSong, queuedByHand);
+        }
     } else {
         m_shuffledQueue.clear();
     }
@@ -1498,6 +1551,7 @@ void PlaybackController::reset()
     m_queue.clear();
     m_history.clear();
     m_shuffledQueue.clear();
+    m_queuedByHand.clear();
     setCurrentSong(std::nullopt);
     m_playbackNeedsLoad = false;
     m_restoredPlayback = false;

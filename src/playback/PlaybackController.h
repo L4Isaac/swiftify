@@ -27,6 +27,7 @@
 #include <QDateTime>
 #include <QDeadlineTimer>
 #include <QObject>
+#include <QSet>
 #include <QTimer>
 #include <QtQml/qqmlregistration.h>
 
@@ -251,6 +252,10 @@ private:
     void sleepTimerTick();
     void updatePlaybackWorkers();
     void rebuildShuffledQueue(const std::optional<Song> &startingWith);
+    /// the songs still to come that play next or play last added, in order
+    QList<Song> upNextQueuedByHand() const;
+    /// puts `songs` straight after `current` in the shuffled order
+    void keepAfterInShuffle(const Song &current, const QList<Song> &songs);
     /// the first playable song from row `index` of the queue in play order,
     /// one way or the other, -1 starting from the top
     std::optional<Song> playableFrom(int index, int direction, bool allowWrap) const;
@@ -295,6 +300,9 @@ private:
     std::optional<Song> m_currentSong;
     SongListModel *m_upNext;
     SongListModel *m_previouslyPlayed;
+    /// songs added with play next or play last. picking another song keeps
+    /// the ones still to come ahead of the new list, as spotify's queue does
+    QSet<quint64> m_queuedByHand;
 
     /// whatever is asking the core to make sound right now: a song loading, a
     /// resume, an output rebuild. empty once it finished or was withdrawn.

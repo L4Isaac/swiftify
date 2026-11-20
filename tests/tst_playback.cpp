@@ -38,6 +38,8 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <algorithm>
+
 using namespace swiftify;
 using swiftify::testing::FakeCore;
 
@@ -590,6 +592,67 @@ private slots:
         upNext = rig.player.upNextSongs();
         QCOMPARE(upNext.size(), 2);
         QCOMPARE(upNext.last().uri, queue[1].uri);
+    }
+
+    void songsQueuedByHandSurvivePickingAnotherSong()
+    {
+        // Given
+        Rig rig;
+        const QList<Song> album = makeQueue(3);
+        QList<Song> playlist;
+        for (int index = 0; index < 4; ++index) {
+            playlist.append(makeSong(QStringLiteral("track%1").arg(index)));
+        }
+        rig.player.play(album[0], album);
+        rig.finishLoading();
+        const Song next = makeSong(QStringLiteral("next"));
+        const Song last = makeSong(QStringLiteral("last"));
+        rig.player.playNext(next);
+        rig.player.playLast(last);
+
+        // When
+        rig.player.play(playlist[2], playlist);
+        rig.finishLoading();
+
+        // Then
+        QList<Song> upNext = rig.player.upNextSongs();
+        QCOMPARE(upNext.size(), 3);
+        QVERIFY(upNext[0].isSameInstance(next));
+        QVERIFY(upNext[1].isSameInstance(last));
+        QVERIFY(upNext[2].isSameInstance(playlist[3]));
+
+        // a queued song that has played does not come back
+        rig.player.skipForward();
+        rig.finishLoading();
+        QVERIFY(rig.player.currentSong().isSameInstance(next));
+        rig.player.play(playlist[0], playlist);
+        rig.finishLoading();
+        upNext = rig.player.upNextSongs();
+        QCOMPARE(upNext.size(), 4);
+        QVERIFY(upNext[0].isSameInstance(last));
+        QVERIFY(std::none_of(upNext.begin(), upNext.end(), [&](const Song &song) { return song.isSameInstance(next); }));
+    }
+
+    void songsQueuedByHandStayFirstWithShuffleAndASongPlayedAlone()
+    {
+        // Given
+        Rig rig;
+        const QList<Song> album = makeQueue(5);
+        rig.player.toggleShuffle();
+        rig.player.play(album[0], album);
+        rig.finishLoading();
+        const Song queued = makeSong(QStringLiteral("queued"));
+        rig.player.playLast(queued);
+
+        // When
+        const Song alone = makeSong(QStringLiteral("alone"));
+        rig.player.play(alone, {});
+        rig.finishLoading();
+
+        // Then
+        const QList<Song> upNext = rig.player.upNextSongs();
+        QCOMPARE(upNext.size(), 1);
+        QVERIFY(upNext.first().isSameInstance(queued));
     }
 
     void backRestartsAfterThreeSeconds()
